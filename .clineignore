@@ -1,0 +1,43 @@
+# Build output - always ignore
+target/
+build/
+.gradle/
+out/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+.vscode/
+
+# Compiled artifacts
+*.class
+*.jar
+*.war
+*.ear
+*.so
+*.exe
+
+# Logs
+*.log
+logs/
+
+# License and legal files (not relevant to coding)
+LICENSE.txt
+src/license/THIRD-PARTY.properties
+
+# CI/CD config (not needed for code context)
+.gitlab-ci.yml
+Jenkinsfile
+
+# Hidden system files
+.*
+
+# Secrets (NEVER let AI see these)
+*.key
+*.pem
+*.p12
+application-prod.yml
+application-prod.yaml
+.env
+credentials.json
