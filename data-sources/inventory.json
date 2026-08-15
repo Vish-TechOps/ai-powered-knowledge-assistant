@@ -1,0 +1,18 @@
+{
+  "collection": "ai-knowledge-assistant",
+  "pages": [
+    {
+      "title": "Process Guide",
+      "page_id": "12345678",
+      "url": "https://<confluence-host>/spaces/<space-key>/pages/<page-id>/<page-title>",
+      "space_key": "<space-key>",
+      "tags": [
+        "code",
+        "complete",
+        "guide",
+        "ai"
+      ],
+      "enabled": true
+    }
+  ]
+}

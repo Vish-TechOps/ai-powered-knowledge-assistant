@@ -1,0 +1,125 @@
+# AI-Powered Enterprise Knowledge Assistant
+# =========================================================
+# These rules govern all code in this project.
+# Cline must follow them strictly during any code generation or modification.
+
+## 1. Language & Runtime
+- Python 3.10+ only
+- Use type hints on ALL function signatures and return types
+- Use `pathlib.Path` for all file paths (no raw string paths)
+
+## 2. Code Style
+- Follow PEP 8 strictly
+- Max line length: 100 characters
+- Use double quotes for strings
+- One blank line between logical blocks inside a function
+- Two blank lines between top-level definitions
+
+## 3. Documentation
+- Every public function/class MUST have a docstring (Google style)
+- Module-level docstring required in every file
+- Inline comments only for non-obvious logic (no noise comments)
+
+## 4. Configuration
+- ALL secrets (API keys, tokens, URLs) must be read from environment variables
+- Config values must be centralised in `config.py` — never read `os.getenv()` elsewhere
+- Never hardcode any endpoint, model name, or credential in business logic files
+
+## 5. Logging
+- Use the standard `logging` module — NEVER use `print()` in production code
+- Log level: INFO for milestones, DEBUG for diagnostic detail, WARNING/ERROR for failures
+- Logger name must match the module: `logging.getLogger(__name__)`
+- Ingest scripts may use `print()` for final user-facing summary only
+
+## 6. Error Handling
+- Wrap ALL external calls (Confluence REST API, Qdrant, Neo4j, LiteLLM/OpenAI) in try/except
+- Catch specific exceptions (not bare `except:`)
+- Log the error with context before re-raising or returning a safe fallback
+- Never silently swallow exceptions
+
+## 7. RAG Design (Non-Negotiable)
+- Ingest pipeline order: fetch → clean → chunk → embed → store (never skip steps)
+- Query pipeline order: embed → retrieve → filter by score → build context → generate (never skip steps)
+- Chunk IDs MUST be deterministic: `sha256(page_id + "_" + chunk_index)`
+- Qdrant payload MUST include: text, page_id, page_title, url, tags, chunk_index, total_chunks, source, ingested_at
+- Neo4j Chunk node MUST include: chunk_id, text, embedding, page_id, page_title, url, tags, chunk_index, total_chunks, heading_context, ingested_at
+- Score threshold must be applied before sending chunks to LLM (both Qdrant and Neo4j pipelines)
+
+## 8. Chunking Rules
+- Target: 300–500 tokens per chunk
+- Overlap: ~50 tokens (last paragraph of previous chunk prepended to next)
+- Split on semantic boundaries: headings (h1–h4), paragraphs — NOT fixed character count
+- Each chunk MUST carry the last seen heading as a context prefix
+
+## 9. File / Module Responsibilities (Single Responsibility Principle)
+- `config.py`              → env vars and constants only (Qdrant + Neo4j + LiteLLM + Confluence)
+- `confluence_loader.py`   → fetch + clean Confluence pages only
+- `chunker.py`             → chunking logic only
+- `embedder.py`            → embedding generation only
+- `qdrant_store.py`        → Qdrant collection management + upsert + search only
+- `rag_ingest.py`          → Qdrant ingest pipeline orchestration only
+- `rag_query.py`           → Qdrant query pipeline orchestration only (legacy / direct run only)
+
+## 10. Inventory & Data Sources
+- `data-sources/inventory.json` is the SINGLE source of truth for all Confluence pages
+- Both Qdrant and Neo4j pipelines MUST read from the same inventory.json
+- Pages with `"enabled": false` must be skipped silently (not errored)
+- Never hardcode page IDs or URLs in Python scripts
+
+## 11. Idempotency
+- Re-running any ingest script on the same pages must produce identical results
+- Qdrant: relies on upsert semantics with deterministic chunk IDs
+- Neo4j: relies on MERGE semantics on `chunk_id` and `page_id` — never use CREATE for nodes that may already exist
+
+## 12. Extensibility
+- Functions must accept parameters, not read globals directly (allows future testing/mocking)
+- Keep RAG steps decoupled so memory bank or additional graph layers can be added without refactoring
+- Neo4j graph schema must allow future addition of (Chunk)-[:SIMILAR_TO]->(Chunk) edges without migration
+
+## 13. Intent-Aware Backend Routing (Qdrant MCP vs Neo4j MCP)
+#
+# This rule defines the decision-making logic Cline uses to route user queries
+# to the correct MCP server. Routing must be determined BEFORE executing any query.
+# Do NOT call both MCP servers for the same query — choose exactly one.
+#
+# Both backends are exposed as live MCP servers (visible in Cline → MCP Servers → Configure):
+#   - qdrant-server   → replaces rag_query.py      (semantic / vector search)
+#   - neo4j-server    → replaces rag_query_neo4j.py (graph / relationship traversal)
+#
+# Never fall back to executing rag_query.py or rag_query_neo4j.py directly.
+# Always prefer the MCP tool call — it is the authoritative query interface.
+
+### Route to QDRANT MCP SERVER (`qdrant-server`) when the query signals:
+- Semantic similarity search or document/knowledge retrieval
+- Summarisation, explanation, or "what does the page say about X"
+- Broad content lookup where meaning matters more than structure
+- Signal words: find, search, what is, explain, summarise, tell me about,
+  describe, overview, how does, what are, show me content about
+
+### Route to NEO4J MCP SERVER (`neo4j-server`) when the query signals:
+- Relationship traversal or dependency analysis between entities
+- Impact tracing: "what calls X", "what depends on Y", "what is affected by Z"
+- Multi-hop graph questions: "which pages link to…", "what chunks belong to…"
+- Structural questions about the knowledge graph itself
+- Signal words: depends on, related to, linked to, impact of, calls, graph,
+  relationship, trace, connected to, affects, references, belongs to
+
+### Decision algorithm (applied in strict order):
+1. If Neo4j signal words are present  → invoke the `neo4j-server` MCP server tool
+2. If Qdrant signal words are present → invoke the `qdrant-server` MCP server tool
+3. If ambiguous (no clear signal)     → default to `qdrant-server` (broader recall, lower latency)
+
+### How to invoke each MCP server:
+- Use the MCP tool exposed by `qdrant-server` for vector/semantic queries.
+  Pass the user's natural-language query as the tool's query argument.
+- Use the MCP tool exposed by `neo4j-server` for graph/relationship queries.
+  Pass the user's natural-language query as the tool's query argument.
+- Do NOT construct Cypher or Qdrant filter syntax manually — the MCP server handles that internally.
+- Do NOT execute `rag_query.py` via shell/subprocess when answering
+  user questions; those scripts are reserved for offline debugging and direct CLI use only.
+
+### Routing constraints (never violate):
+- Never call `qdrant-server` for dependency/relationship traversal questions
+- Never fan-out to both MCP servers for the same query and merge results
+  unless the user explicitly asks for a combined view
+- Always state which MCP server was selected and why before returning the answer
